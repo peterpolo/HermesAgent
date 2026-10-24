@@ -1,0 +1,66 @@
+# GitHub Actions — Build & Deploy to GitHub Pages
+#
+# Pipeline (runs on every push to `main` and manually):
+#   1. CI  : check out + validate the static site (dependency-free, always reproducible)
+#   2. Build: assemble the deployable site into ./build
+#   3. Deploy: publish to GitHub Pages via the official actions/deploy-pages
+name: Build and deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deploy in flight at a time
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: CI — validate site
+        run: |
+          set -euo pipefail
+          # The site is a static single-page app; fail fast on missing/mangled output.
+          test -f index.html || { echo "::error::index.html missing"; exit 1; }
+          head -c 200 index.html | grep -qiE '<!DOCTYPE html|<html' || \
+            { echo "::error::index.html does not look like HTML"; exit 1; }
+          # Ensure no accidental placeholder/leaked token shipped in the payload.
+          if grep -RE 'github_pat_|ghp_|gho_|x-access-token:' index.html; then
+            echo "::error::sensitive material detected in index.html"
+            exit 1
+          fi
+          echo "CI checks passed. index.html = $(wc -c < index.html) bytes."
+
+      - name: Build — assemble deployable site
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          cp index.html build/
+          ls -lh build/
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build
+
+  deploy:
+    environment:
+      name: github-pages
+      url: "${{ steps.deployment.outputs.page_url }}"
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
